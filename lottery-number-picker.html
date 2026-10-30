@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>随机选号</title>
+  <style>
+    :root { color-scheme: light dark; font-family: "Microsoft YaHei", system-ui, sans-serif; }
+    body { margin: 0; min-height: 100vh; background: #f5f7fb; color: #1f2937; display: grid; place-items: center; }
+    main { width: min(720px, calc(100% - 32px)); background: #fff; border-radius: 18px; padding: 28px; box-shadow: 0 14px 35px rgba(15, 23, 42, .12); }
+    h1 { margin: 0 0 8px; font-size: 26px; }
+    .note { margin: 0 0 10px; color: #64748b; }
+    .status { margin: 0 0 24px; color: #64748b; font-size: 13px; }
+    .tabs { display: flex; gap: 10px; margin-bottom: 22px; }
+    button { font: inherit; border: 0; border-radius: 10px; padding: 11px 17px; cursor: pointer; }
+    .tab { background: #e8edf5; color: #334155; }
+    .tab.active { background: #1d4ed8; color: #fff; }
+    .draw { background: #dc2626; color: #fff; font-weight: 700; width: 100%; font-size: 18px; }
+    .result { margin: 22px 0; min-height: 132px; padding: 18px; border-radius: 12px; background: #f8fafc; }
+    .rule { margin: 0 0 16px; color: #475569; }
+    .balls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .ball { width: 42px; height: 42px; display: grid; place-items: center; border-radius: 50%; color: white; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .red { background: #e11d48; } .blue { background: #2563eb; } .orange { background: #ea580c; }
+    .label { width: 100%; margin: 4px 0 -2px; font-size: 13px; color: #64748b; }
+    .history { margin-top: 22px; }
+    .history h2 { font-size: 16px; margin: 0 0 10px; }
+    ol { margin: 0; padding-left: 22px; color: #475569; }
+    li { padding: 5px 0; }
+    footer { margin-top: 22px; font-size: 12px; color: #94a3b8; }
+    @media (prefers-color-scheme: dark) { body { background: #101827; color: #e5e7eb; } main { background: #182235; } .note,.rule,li { color: #b4c0d3; } .result { background: #111a2a; } .tab { background: #26344c; color: #e5e7eb; } footer,.label { color: #98a8c0; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>随机选号</h1>
+    <p class="note">仅在加载全历史开奖数据后生成；如候选号码可命中任一历史期次的一、二、三等奖，将自动重新选号。</p>
+    <p class="status" id="status" role="status">正在加载双色球和大乐透的全历史开奖数据…</p>
+    <div class="tabs" role="tablist" aria-label="选择彩种">
+      <button class="tab active" id="ssqTab" type="button" role="tab" aria-selected="true">双色球</button>
+      <button class="tab" id="dltTab" type="button" role="tab" aria-selected="false">大乐透</button>
+    </div>
+    <section class="result" aria-live="polite">
+      <p class="rule" id="rule">双色球：红球 6 个（01–33）+ 蓝球 1 个（01–16）</p>
+      <div class="balls" id="balls"><span class="label">点击下方按钮生成号码</span></div>
+    </section>
+    <button class="draw" id="draw" type="button" disabled>正在加载历史数据…</button>
+    <section class="history">
+      <h2>本次记录</h2>
+      <ol id="history"><li>暂无选号记录</li></ol>
+    </section>
+    <footer>数据加载失败时，程序不会生成号码。仅供娱乐和随机组合参考；不代表预测结果，请理性购彩。</footer>
+  </main>
+  <script>
+    const configs = {
+      ssq: { name: '双色球', rule: '双色球：红球 6 个（01–33）+ 蓝球 1 个（01–16）', groups: [{ label: '红球', count: 6, max: 33, cls: 'red' }, { label: '蓝球', count: 1, max: 16, cls: 'blue' }] },
+      dlt: { name: '大乐透', rule: '大乐透：前区 5 个（01–35）+ 后区 2 个（01–12）', groups: [{ label: '前区', count: 5, max: 35, cls: 'red' }, { label: '后区', count: 2, max: 12, cls: 'orange' }] }
+    };
+    const sources = {
+      ssq: 'https://raw.githubusercontent.com/Justdoitfor/my-lottery-data/main/data/ssq.json',
+      dlt: 'https://raw.githubusercontent.com/Justdoitfor/my-lottery-data/main/data/dlt.json'
+    };
+    let type = 'ssq';
+    const historical = { ssq: [], dlt: [] };
+    const balls = document.getElementById('balls');
+    const history = document.getElementById('history');
+    const rule = document.getElementById('rule');
+    const status = document.getElementById('status');
+    const drawButton = document.getElementById('draw');
+    function pick(count, max) {
+      const pool = Array.from({ length: max }, (_, i) => i + 1);
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1);
+        [pool[i], pool[j]] = [pool[j], pool[i]];
+      }
+      return pool.slice(0, count).sort((a, b) => a - b);
+    }
+    function matchingCount(a, b) {
+      const set = new Set(b.map(Number));
+      return a.filter(value => set.has(value)).length;
+    }
+    function historicalAward(candidate) {
+      if (type === 'ssq') {
+        const red = candidate[0].values;
+        const blue = candidate[1].values[0];
+        for (const draw of historical.ssq) {
+          const redHits = matchingCount(red, draw.red);
+          const blueHit = Number(draw.blue[0]) === blue;
+          if (redHits === 6) return blueHit ? '一等奖' : '二等奖';
+          if (redHits === 5 && blueHit) return '三等奖';
+        }
+      } else {
+        const front = candidate[0].values;
+        const back = candidate[1].values;
+        for (const draw of historical.dlt) {
+          const frontHits = matchingCount(front, draw.front);
+          const backHits = matchingCount(back, draw.back);
+          if (frontHits === 5 && backHits === 2) return '一等奖';
+          if (frontHits === 5 && backHits === 1) return '二等奖';
+          if ((frontHits === 5 && backHits === 0) || (frontHits === 4 && backHits === 2)) return '三等奖';
+        }
+      }
+      return null;
+    }
+    function makeEligibleResult() {
+      const config = configs[type];
+      for (let attempt = 0; attempt < 10000; attempt++) {
+        const candidate = config.groups.map(group => ({ ...group, values: pick(group.count, group.max) }));
+        if (!historicalAward(candidate)) return candidate;
+      }
+      throw new Error('未能生成符合排除条件的号码，请重试。');
+    }
+    function setType(next) {
+      type = next;
+      document.getElementById('ssqTab').classList.toggle('active', next === 'ssq');
+      document.getElementById('dltTab').classList.toggle('active', next === 'dlt');
+      document.getElementById('ssqTab').setAttribute('aria-selected', next === 'ssq');
+      document.getElementById('dltTab').setAttribute('aria-selected', next === 'dlt');
+      rule.textContent = configs[next].rule;
+      balls.innerHTML = '<span class="label">点击下方按钮生成号码</span>';
+    }
+    function draw() {
+      if (!historical.ssq.length || !historical.dlt.length) return;
+      const config = configs[type];
+      let result;
+      try { result = makeEligibleResult(); } catch (error) { status.textContent = error.message; return; }
+      balls.innerHTML = result.map(group => `<span class="label">${group.label}</span>${group.values.map(value => `<span class="ball ${group.cls}">${String(value).padStart(2, '0')}</span>`).join('')}`).join('');
+      const text = result.map(group => `${group.label} ${group.values.map(v => String(v).padStart(2, '0')).join(' ')}`).join('；');
+      if (history.children.length === 1 && history.textContent.includes('暂无')) history.innerHTML = '';
+      const item = document.createElement('li');
+      item.textContent = `${config.name}：${text}`;
+      history.prepend(item);
+      while (history.children.length > 8) history.removeChild(history.lastChild);
+    }
+    document.getElementById('ssqTab').addEventListener('click', () => setType('ssq'));
+    document.getElementById('dltTab').addEventListener('click', () => setType('dlt'));
+    document.getElementById('draw').addEventListener('click', draw);
+    Promise.all(Object.entries(sources).map(async ([key, url]) => {
+      const response = await fetch(url, { cache: 'no-store' });
+      if (!response.ok) throw new Error(`无法下载 ${key.toUpperCase()} 历史数据`);
+      const data = await response.json();
+      if (!Array.isArray(data) || !data.length) throw new Error(`${key.toUpperCase()} 历史数据为空`);
+      historical[key] = data;
+    })).then(() => {
+      const ssqLatest = historical.ssq[0];
+      const dltLatest = historical.dlt[0];
+      status.textContent = `已加载双色球 ${historical.ssq.length} 期（最新 ${ssqLatest.issue}）和大乐透 ${historical.dlt.length} 期（最新 ${dltLatest.issue}）历史数据。`;
+      drawButton.disabled = false;
+      drawButton.textContent = '随机选号（排除历史一、二、三等奖）';
+    }).catch(() => {
+      status.textContent = '历史数据加载失败，已禁止生成号码。请检查网络连接后重新打开本页面。';
+      drawButton.textContent = '历史数据未加载';
+    });
+  </script>
+</body>
+</html>
